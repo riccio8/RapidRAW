@@ -6,8 +6,6 @@ use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
-use std::hash::{Hash, Hasher};
-use std::collections::hash_map::DefaultHasher;
 
 use anyhow::Result;
 use base64::{Engine as _, engine::general_purpose};
@@ -17,6 +15,8 @@ use image::{DynamicImage, GenericImageView, ImageBuffer, Luma};
 use little_exif::exif_tag::ExifTag;
 use little_exif::metadata::Metadata;
 use rayon::prelude::*;
+use rayon::ThreadPoolBuilder;
+use num_cpus;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager};
@@ -115,25 +115,23 @@ pub struct ComfyUIWorkflowConfig {
     pub final_output_node_id: String,
     pub sampler_node_id: String,
     pub sampler_steps: u32,
-    pub transfer_resolution: Option<u32>,
-    pub inpaint_resolution_node_id: String,
-    pub inpaint_resolution: u32,
+    pub inpaint_resolution: Option<u32>,
 }
 
 impl Default for ComfyUIWorkflowConfig {
     fn default() -> Self {
         let mut model_checkpoints = HashMap::new();
         model_checkpoints.insert(
-            "1".to_string(),
+            "4".to_string(),
             "XL_RealVisXL_V5.0_Lightning.safetensors".to_string(),
         );
 
         let mut vae_loaders = HashMap::new();
-        vae_loaders.insert("49".to_string(), "sdxl_vae.safetensors".to_string());
+        vae_loaders.insert("67".to_string(), "sdxl_vae.safetensors".to_string());
 
         let mut controlnet_loaders = HashMap::new();
         controlnet_loaders.insert(
-            "12".to_string(),
+            "16".to_string(),
             "diffusion_pytorch_model_promax.safetensors".to_string(),
         );
 
@@ -142,15 +140,13 @@ impl Default for ComfyUIWorkflowConfig {
             model_checkpoints,
             vae_loaders,
             controlnet_loaders,
-            source_image_node_id: "30".to_string(),
-            mask_image_node_id: "47".to_string(),
-            text_prompt_node_id: "7".to_string(),
-            final_output_node_id: "41".to_string(),
-            sampler_node_id: "28".to_string(),
+            source_image_node_id: "11".to_string(),
+            mask_image_node_id: "148".to_string(),
+            text_prompt_node_id: "6".to_string(),
+            final_output_node_id: "252".to_string(),
+            sampler_node_id: "3".to_string(),
             sampler_steps: 10,
-            transfer_resolution: Some(3072),
-            inpaint_resolution_node_id: "37".to_string(),
-            inpaint_resolution: 1280,
+            inpaint_resolution: Some(1536),
         }
     }
 }
@@ -175,7 +171,6 @@ pub struct AppSettings {
     pub tagging_thread_count: Option<u32>,
     pub thumbnail_size: Option<String>,
     pub thumbnail_aspect_ratio: Option<String>,
-    pub ai_provider: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -200,7 +195,6 @@ impl Default for AppSettings {
             tagging_thread_count: Some(3),
             thumbnail_size: Some("medium".to_string()),
             thumbnail_aspect_ratio: Some("cover".to_string()),
-            ai_provider: Some("cpu".to_string()),
         }
     }
 }
@@ -400,8 +394,7 @@ pub fn generate_thumbnail_data(
             let flip_horizontal = meta.adjustments["flipHorizontal"]
                 .as_bool()
                 .unwrap_or(false);
-            let flip_vertical = meta.adjustments["flipVertical"].as_bool()
-                .unwrap_or(false);
+            let flip_vertical = meta.adjustments["flipVertical"].as_bool().unwrap_or(false);
 
             let flipped_image = apply_flip(processing_base, flip_horizontal, flip_vertical);
             let rotated_image = apply_rotation(&flipped_image, rotation_degrees);
@@ -462,16 +455,11 @@ pub fn generate_thumbnail_data(
                 None
             });
 
-            let mut hasher = DefaultHasher::new();
-            path_str.hash(&mut hasher);
-            meta.adjustments.to_string().hash(&mut hasher);
-            let unique_hash = hasher.finish();
-
             if let Ok(processed_image) = gpu_processing::process_and_get_dynamic_image(
                 context,
                 &state,
                 &cropped_preview,
-                unique_hash,
+                0,
                 gpu_adjustments,
                 &mask_bitmaps,
                 lut,
@@ -600,6 +588,7 @@ pub async fn generate_thumbnails(
     .map_err(|e| e.to_string())?
 }
 
+
 #[tauri::command]
 pub fn generate_thumbnails_progressive(
     paths: Vec<String>,
@@ -611,6 +600,10 @@ pub fn generate_thumbnails_progressive(
         .store(false, Ordering::SeqCst);
     let cancellation_token = state.thumbnail_cancellation_token.clone();
 
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(num_cpus::get_physical() - 1)
+        .build()
+        .unwrap();
     let cache_dir = app_handle
         .path()
         .app_cache_dir()
@@ -623,51 +616,52 @@ pub fn generate_thumbnails_progressive(
     let app_handle_clone = app_handle.clone();
     let total_count = paths.len();
     let completed_count = Arc::new(AtomicUsize::new(0));
-
     thread::spawn(move || {
-        let state = app_handle_clone.state::<AppState>();
-        let gpu_context = gpu_processing::get_or_init_gpu_context(&state).ok();
-
-        let _ = paths.par_iter().try_for_each(|path_str| -> Result<(), ()> {
-            if cancellation_token.load(Ordering::Relaxed) {
-                return Err(());
-            }
-
-            let result = generate_single_thumbnail_and_cache(
-                path_str,
-                &thumb_cache_dir,
-                gpu_context.as_ref(),
-                None,
-                false,
-                &app_handle_clone,
-            );
-
-            if let Some((thumbnail_data, rating)) = result {
+        pool.install(move || {
+            let state = app_handle_clone.state::<AppState>();
+            let gpu_context = gpu_processing::get_or_init_gpu_context(&state).ok();
+    
+            let _ = paths.par_iter().try_for_each(|path_str| -> Result<(), ()> {
+                if cancellation_token.load(Ordering::Relaxed) {
+                    return Err(());
+                }
+    
+                let result = generate_single_thumbnail_and_cache(
+                    path_str,
+                    &thumb_cache_dir,
+                    gpu_context.as_ref(),
+                    None,
+                    false,
+                    &app_handle_clone,
+                );
+    
+                if let Some((thumbnail_data, rating)) = result {
+                    if cancellation_token.load(Ordering::Relaxed) {
+                        return Err(());
+                    }
+                    let _ = app_handle_clone.emit(
+                        "thumbnail-generated",
+                        serde_json::json!({ "path": path_str, "data": thumbnail_data, "rating": rating }),
+                    );
+                }
+    
+                let completed = completed_count.fetch_add(1, Ordering::Relaxed) + 1;
                 if cancellation_token.load(Ordering::Relaxed) {
                     return Err(());
                 }
                 let _ = app_handle_clone.emit(
-                    "thumbnail-generated",
-                    serde_json::json!({ "path": path_str, "data": thumbnail_data, "rating": rating }),
+                    "thumbnail-progress",
+                    serde_json::json!({ "completed": completed, "total": total_count }),
                 );
+                Ok(())
+            });
+    
+            if !cancellation_token.load(Ordering::Relaxed) {
+                let _ = app_handle_clone.emit("thumbnail-generation-complete", true);
             }
-
-            let completed = completed_count.fetch_add(1, Ordering::Relaxed) + 1;
-            if cancellation_token.load(Ordering::Relaxed) {
-                return Err(());
-            }
-            let _ = app_handle_clone.emit(
-                "thumbnail-progress",
-                serde_json::json!({ "completed": completed, "total": total_count }),
-            );
-            Ok(())
         });
-
-        if !cancellation_token.load(Ordering::Relaxed) {
-            let _ = app_handle_clone.emit("thumbnail-generation-complete", true);
-        }
     });
-
+    
     Ok(())
 }
 
