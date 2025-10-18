@@ -1,0 +1,3 @@
+[submodule "src-tauri/DenoiseRs/median"]
+	path = src-tauri/DenoiseRs/median
+	url = https://github.com/riccio8/DenoiseRs
