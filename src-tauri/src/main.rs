@@ -2573,7 +2573,7 @@ fn setup_logging(app_handle: &tauri::AppHandle) {
     );
 }
 
-fn main() {
+fn control_main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_fs::init())
@@ -2717,4 +2717,13 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+fn main(){
+    let result = panic::catch_unwind(|| control_main());
+    
+    if result.is_err(){
+        log::error!("APP CRASHED. Restarting service...");
+        control_main();
+    }
 }
