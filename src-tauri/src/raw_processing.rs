@@ -13,16 +13,6 @@ pub fn develop_raw_image(file_bytes: &[u8], fast_demosaic: bool) -> Result<Dynam
     Ok(apply_orientation(developed_image, orientation))
 }
 
-// we NEED to apply gamma & compress some highlights, otherwise we get purple artefacts because of rawler's faulty black point calculation in combination with white balance
-fn apply_gamma(linear_val: f32) -> f32 {
-    let clipped_val = linear_val.max(0.0).min(1.0);
-    if clipped_val <= 0.0031308 {
-        clipped_val * 12.92
-    } else {
-        1.055 * clipped_val.powf(1.0 / 2.4) - 0.055
-    }
-}
-
 fn develop_internal(file_bytes: &[u8], fast_demosaic: bool) -> Result<(DynamicImage, Orientation)> {
     let source = RawSource::new_from_slice(file_bytes);
     let decoder = rawler::get_decoder(&source)?;
@@ -70,7 +60,7 @@ fn develop_internal(file_bytes: &[u8], fast_demosaic: bool) -> Result<(DynamicIm
         Intermediate::Monochrome(pixels) => {
             pixels.data.iter_mut().for_each(|p| {
                 let linear_val = *p * rescale_factor;
-                *p = apply_gamma(linear_val);
+                *p = linear_val.max(0.0).min(1.0);
             });
         }
         Intermediate::ThreeColor(pixels) => {
@@ -106,16 +96,16 @@ fn develop_internal(file_bytes: &[u8], fast_demosaic: bool) -> Result<(DynamicIm
                     (r, g, b)
                 };
 
-                p[0] = apply_gamma(final_r);
-                p[1] = apply_gamma(final_g);
-                p[2] = apply_gamma(final_b);
+                p[0] = final_r.max(0.0).min(1.0);
+                p[1] = final_g.max(0.0).min(1.0);
+                p[2] = final_b.max(0.0).min(1.0);
             });
         }
         Intermediate::FourColor(pixels) => {
             pixels.data.iter_mut().for_each(|p| {
                 p.iter_mut().for_each(|c| {
                     let linear_val = *c * rescale_factor;
-                    *c = apply_gamma(linear_val);
+                    *c = linear_val.max(0.0).min(1.0);
                 });
             });
         }
