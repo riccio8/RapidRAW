@@ -2574,7 +2574,7 @@ fn setup_logging(app_handle: &tauri::AppHandle) {
     );
 }
 
-fn control_main() {
+fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_fs::init())
@@ -2718,38 +2718,4 @@ fn control_main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-}
-
-fn main() {
-    let mut crash_count: i8 = 0;
-    loop {
-        let result = panic::catch_unwind(|| control_main());
-        if result.is_err() {
-            crash_count += 1;
-            if crash_count > 3 {
-                log::error!("Too many consecutive crashes. Exiting.");
-                break;
-            }
-        } else {
-            break;
-        }
-        match result {
-            Ok(_) => {
-                log::info!("Application exited normally. Leaving the restart loop.");
-                break;
-            }
-            Err(err) => {
-                if let Some(msg) = err.downcast_ref::<&str>() {
-                    log::error!("Panic occurred: {}", msg);
-                } else if let Some(msg) = err.downcast_ref::<String>() {
-                    log::error!("Panic occurred: {}", msg);
-                } else {
-                    log::error!("Unknown panic type (not a &str or String).");
-                }
-
-                log::error!("APPLICATION CRASHED. Restarting in 3 seconds...");
-                thread::sleep(Duration::from_millis(2_850));
-            }
-        }
-    }
 }
