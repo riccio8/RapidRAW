@@ -2748,7 +2748,7 @@ fn main() {
                 }
 
                 log::error!("APPLICATION CRASHED. Restarting in 3 seconds...");
-                thread::sleep(Duration::from_secs(3));
+                thread::sleep(Duration::from_millis(2_850));
             }
         }
     }
